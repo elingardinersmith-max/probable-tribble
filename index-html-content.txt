@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Utility Monitor - Municipalization Tracking</title>
+    <meta name="description" content="Track utility municipalization conversations, public power initiatives, and city/state takeovers across the United States">
+    
+    <!-- React and Babel for JSX transformation -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide React Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+        }
+        
+        #root {
+            width: 100%;
+            min-height: 100vh;
+        }
+
+        /* Loading spinner */
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #e2e8f0;
+            font-size: 1.5rem;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div class="loading">Loading Utility Monitor...</div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        // Icons (using lucide)
+        const Search = lucide.Search;
+        const X = lucide.X;
+        const Filter = lucide.Filter;
+        const AlertCircle = lucide.AlertCircle;
+        const CheckCircle = lucide.CheckCircle;
+        const Clock = lucide.Clock;
+        const ChevronDown = lucide.ChevronDown;
+        const ChevronUp = lucide.ChevronUp;
+        const MapPin = lucide.MapPin;
+        const Zap = lucide.Zap;
+        const RefreshCw = lucide.RefreshCw;
+        const Loader = lucide.Loader;
+        const Server = lucide.Server;
+        const ExternalLink = lucide.ExternalLink;
+
+        // Use relative API URL (same domain as frontend)
+        const API_BASE_URL = '/api';
+
+        const UtilityMonitorApp = () => {
+          const [mentions, setMentions] = useState([]);
+          const [filteredMentions, setFilteredMentions] = useState([]);
+          const [view, setView] = useState('review');
+          const [selectedMention, setSelectedMention] = useState(null);
+          const [searchQuery, setSearchQuery] = useState('');
+          const [filters, setFilters] = useState({
+            source: 'all',
+            location: 'all',
+            priority: 'all',
+            utilityType: 'all'
+          });
+          const [showFilters, setShowFilters] = useState(false);
+          const [stats, setStats] = useState({
+            pending: 0,
+            approved: 0,
+            deleted: 0,
+            todaysCaptured: 0
+          });
+          const [isCrawling, setIsCrawling] = useState(false);
+          const [crawlStatus, setCrawlStatus] = useState('');
+          const [backendConnected, setBackendConnected] = useState(false);
+
+          useEffect(() => {
+            checkBackendConnection();
+            fetchMentions();
+            fetchStats();
+          }, []);
+
+          const checkBackendConnection = async () => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/health`);
+              if (response.ok) {
+                setBackendConnected(true);
+              }
+            } catch (error) {
+              setBackendConnected(false);
+              console.error('Backend connection failed:', error);
+            }
+          };
+
+          const fetchMentions = async () => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/mentions`);
+              if (response.ok) {
+                const data = await response.json();
+                setMentions(data);
+              }
+            } catch (error) {
+              console.error('Error fetching mentions:', error);
+            }
+          };
+
+          const fetchStats = async () => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/stats`);
+              if (response.ok) {
+                const data = await response.json();
+                setStats({
+                  pending: data.pending,
+                  approved: data.approved,
+                  deleted: data.deleted,
+                  todaysCaptured: data.today_captured
+                });
+              }
+            } catch (error) {
+              console.error('Error fetching stats:', error);
+            }
+          };
+
+          useEffect(() => {
+            let filtered = mentions.filter(m => 
+              view === 'review' ? m.status === 'pending' : m.status === 'approved'
+            );
+
+            if (searchQuery) {
+              const query = searchQuery.toLowerCase();
+              filtered = filtered.filter(m => 
+                m.title.toLowerCase().includes(query) ||
+                m.snippet.toLowerCase().includes(query) ||
+                m.location.toLowerCase().includes(query) ||
+                m.utility.toLowerCase().includes(query)
+              );
+            }
+
+            if (filters.source !== 'all') {
+              filtered = filtered.filter(m => m.source === filters.source);
+            }
+            if (filters.location !== 'all') {
+              filtered = filtered.filter(m => m.location === filters.location);
+            }
+            if (filters.priority !== 'all') {
+              filtered = filtered.filter(m => m.priority === filters.priority);
+            }
+            if (filters.utilityType !== 'all') {
+              filtered = filtered.filter(m => m.utilityType === filters.utilityType);
+            }
+
+            setFilteredMentions(filtered);
+          }, [mentions, view, searchQuery, filters]);
+
+          const handleAction = async (mentionId, action) => {
+            try {
+              const response = await fetch(`${API_BASE_URL}/mentions/${mentionId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: action })
+              });
+
+              if (response.ok) {
+                await fetchMentions();
+                await fetchStats();
+                setSelectedMention(null);
+              }
+            } catch (error) {
+              console.error('Error updating mention:', error);
+            }
+          };
+
+          const getUniqueValues = (key) => {
+            return ['all', ...new Set(mentions.map(m => m[key]))];
+          };
+
+          const performCrawl = async () => {
+            setIsCrawling(true);
+            setCrawlStatus('Starting crawl...');
+
+            try {
+              const response = await fetch(`${API_BASE_URL}/crawl`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  queries: [
+                    'utility municipalization news',
+                    'public power initiative',
+                    'municipal utility ballot',
+                    'franchise agreement utility'
+                  ],
+                  max_results_per_query: 10
+                })
+              });
+
+              const data = await response.json();
+
+              if (data.success) {
+                setCrawlStatus(`✓ Crawl complete! Found ${data.new_mentions} new mentions (${data.duplicates} duplicates filtered)`);
+                await fetchMentions();
+                await fetchStats();
+              } else {
+                setCrawlStatus(`✗ Crawl failed: ${data.error}`);
+              }
+            } catch (error) {
+              setCrawlStatus(`✗ Error: ${error.message}`);
+            } finally {
+              setIsCrawling(false);
+              setTimeout(() => setCrawlStatus(''), 5000);
+            }
+          };
+
+          return (
+            <div style={{
+              minHeight: '100vh',
+              background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+              color: '#e2e8f0'
+            }}>
+              {/* Header */}
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.8)',
+                backdropFilter: 'blur(20px)',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
+                padding: '1.5rem 2rem',
+                position: 'sticky',
+                top: 0,
+                zIndex: 100
+              }}>
+                <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                      <div style={{
+                        width: '48px',
+                        height: '48px',
+                        background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+                        borderRadius: '12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <Zap size={28} color="white" />
+                      </div>
+                      <div>
+                        <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: '700', letterSpacing: '-0.02em' }}>
+                          Utility Monitor
+                        </h1>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
+                          <p style={{ margin: 0, fontSize: '0.875rem', color: '#94a3b8' }}>
+                            Live Municipalization Crawler
+                          </p>
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.25rem',
+                            padding: '0.125rem 0.5rem',
+                            background: backendConnected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                            borderRadius: '4px',
+                            fontSize: '0.75rem',
+                            color: backendConnected ? '#6ee7b7' : '#fca5a5'
+                          }}>
+                            <Server size={12} />
+                            {backendConnected ? 'Connected' : 'Disconnected'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Stats */}
+                    <div style={{ display: 'flex', gap: '2rem' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#fbbf24' }}>{stats.todaysCaptured}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Today</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#f59e0b' }}>{stats.pending}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pending</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#10b981' }}>{stats.approved}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Approved</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.75rem', fontWeight: '700', color: '#6366f1' }}>{stats.deleted}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Deleted</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Crawl Controls */}
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '1rem', 
+                    alignItems: 'center',
+                    marginBottom: '1rem',
+                    padding: '1rem',
+                    background: 'rgba(51, 65, 85, 0.3)',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(148, 163, 184, 0.1)',
+                    flexWrap: 'wrap'
+                  }}>
+                    <button
+                      onClick={performCrawl}
+                      disabled={isCrawling || !backendConnected}
+                      style={{
+                        padding: '0.75rem 1.5rem',
+                        background: (isCrawling || !backendConnected) ? 'rgba(100, 116, 139, 0.5)' : 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+                        border: 'none',
+                        borderRadius: '8px',
+                        color: 'white',
+                        cursor: (isCrawling || !backendConnected) ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        fontWeight: '600',
+                        fontSize: '0.875rem',
+                        opacity: (isCrawling || !backendConnected) ? 0.6 : 1
+                      }}
+                    >
+                      {isCrawling ? <Loader size={18} className="spin" /> : <RefreshCw size={18} />}
+                      {isCrawling ? 'Crawling...' : 'Run Crawl Now'}
+                    </button>
+
+                    {crawlStatus && (
+                      <div style={{ 
+                        flex: 1,
+                        minWidth: '200px',
+                        padding: '0.5rem 1rem',
+                        background: crawlStatus.startsWith('✓') ? 'rgba(16, 185, 129, 0.1)' : 
+                                   crawlStatus.startsWith('✗') ? 'rgba(239, 68, 68, 0.1)' :
+                                   'rgba(59, 130, 246, 0.1)',
+                        border: crawlStatus.startsWith('✓') ? '1px solid rgba(16, 185, 129, 0.3)' :
+                                crawlStatus.startsWith('✗') ? '1px solid rgba(239, 68, 68, 0.3)' :
+                                '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: '8px',
+                        fontSize: '0.875rem',
+                        color: crawlStatus.startsWith('✓') ? '#6ee7b7' :
+                               crawlStatus.startsWith('✗') ? '#fca5a5' :
+                               '#93c5fd'
+                      }}>
+                        {crawlStatus}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* View Toggle and Search */}
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', background: 'rgba(51, 65, 85, 0.5)', borderRadius: '12px', padding: '0.25rem' }}>
+                      <button
+                        onClick={() => setView('review')}
+                        style={{
+                          padding: '0.5rem 1.5rem',
+                          background: view === 'review' ? 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)' : 'transparent',
+                          color: view === 'review' ? 'white' : '#94a3b8',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '0.875rem',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        Review Queue
+                      </button>
+                      <button
+                        onClick={() => setView('approved')}
+                        style={{
+                          padding: '0.5rem 1.5rem',
+                          background: view === 'approved' ? 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)' : 'transparent',
+                          color: view === 'approved' ? 'white' : '#94a3b8',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '0.875rem',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        Approved Items
+                      </button>
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: '200px', position: 'relative' }}>
+                      <Search size={20} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }} />
+                      <input
+                        type="text"
+                        placeholder="Search mentions, locations, utilities..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        style={{
+                          width: '100%',
+                          padding: '0.75rem 1rem 0.75rem 3rem',
+                          background: 'rgba(51, 65, 85, 0.5)',
+                          border: '1px solid rgba(148, 163, 184, 0.1)',
+                          borderRadius: '12px',
+                          color: '#e2e8f0',
+                          fontSize: '0.875rem',
+                          outline: 'none'
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => setShowFilters(!showFilters)}
+                      style={{
+                        padding: '0.75rem 1.5rem',
+                        background: showFilters ? 'rgba(59, 130, 246, 0.2)' : 'rgba(51, 65, 85, 0.5)',
+                        border: '1px solid rgba(148, 163, 184, 0.1)',
+                        borderRadius: '12px',
+                        color: '#e2e8f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        fontWeight: '600',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      <Filter size={18} />
+                      Filters
+                      {showFilters ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                  </div>
+
+                  {/* Filters Panel */}
+                  {showFilters && (
+                    <div style={{
+                      marginTop: '1rem',
+                      padding: '1.5rem',
+                      background: 'rgba(51, 65, 85, 0.5)',
+                      borderRadius: '12px',
+                      border: '1px solid rgba(148, 163, 184, 0.1)',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: '1rem'
+                    }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Source</label>
+                        <select
+                          value={filters.source}
+                          onChange={(e) => setFilters({...filters, source: e.target.value})}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(15, 23, 42, 0.8)',
+                            border: '1px solid rgba(148, 163, 184, 0.1)',
+                            borderRadius: '8px',
+                            color: '#e2e8f0',
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          {getUniqueValues('source').map(s => (
+                            <option key={s} value={s}>{s === 'all' ? 'All Sources' : s}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Location</label>
+                        <select
+                          value={filters.location}
+                          onChange={(e) => setFilters({...filters, location: e.target.value})}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(15, 23, 42, 0.8)',
+                            border: '1px solid rgba(148, 163, 184, 0.1)',
+                            borderRadius: '8px',
+                            color: '#e2e8f0',
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          {getUniqueValues('location').map(l => (
+                            <option key={l} value={l}>{l === 'all' ? 'All Locations' : l}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Priority</label>
+                        <select
+                          value={filters.priority}
+                          onChange={(e) => setFilters({...filters, priority: e.target.value})}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(15, 23, 42, 0.8)',
+                            border: '1px solid rgba(148, 163, 184, 0.1)',
+                            borderRadius: '8px',
+                            color: '#e2e8f0',
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          <option value="all">All Priorities</option>
+                          <option value="high">High</option>
+                          <option value="normal">Normal</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Utility Type</label>
+                        <select
+                          value={filters.utilityType}
+                          onChange={(e) => setFilters({...filters, utilityType: e.target.value})}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem',
+                            background: 'rgba(15, 23, 42, 0.8)',
+                            border: '1px solid rgba(148, 163, 184, 0.1)',
+                            borderRadius: '8px',
+                            color: '#e2e8f0',
+                            fontSize: '0.875rem'
+                          }}
+                        >
+                          {getUniqueValues('utilityType').map(t => (
+                            <option key={t} value={t}>{t === 'all' ? 'All Types' : t}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Main Content */}
+              <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: selectedMention ? '1fr 500px' : '1fr', gap: '2rem' }}>
+                  <div>
+                    {filteredMentions.length === 0 ? (
+                      <div style={{
+                        padding: '4rem 2rem',
+                        textAlign: 'center',
+                        background: 'rgba(51, 65, 85, 0.3)',
+                        borderRadius: '16px',
+                        border: '1px solid rgba(148, 163, 184, 0.1)'
+                      }}>
+                        <AlertCircle size={48} style={{ color: '#64748b', margin: '0 auto 1rem' }} />
+                        <h3 style={{ color: '#94a3b8', fontSize: '1.25rem', marginBottom: '0.5rem' }}>No items found</h3>
+                        <p style={{ color: '#64748b', fontSize: '0.875rem', marginBottom: '1rem' }}>
+                          {view === 'review' ? 'Run a crawl to collect mentions' : 'No approved items yet'}
+                        </p>
+                        {view === 'review' && backendConnected && (
+                          <button
+                            onClick={performCrawl}
+                            disabled={isCrawling}
+                            style={{
+                              padding: '0.75rem 1.5rem',
+                              background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+                              border: 'none',
+                              borderRadius: '8px',
+                              color: 'white',
+                              cursor: 'pointer',
+                              fontWeight: '600',
+                              fontSize: '0.875rem'
+                            }}
+                          >
+                            Run First Crawl
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {filteredMentions.map(mention => (
+                          <div
+                            key={mention.id}
+                            onClick={() => setSelectedMention(mention)}
+                            style={{
+                              background: selectedMention?.id === mention.id 
+                                ? 'rgba(59, 130, 246, 0.1)' 
+                                : 'rgba(51, 65, 85, 0.3)',
+                              border: selectedMention?.id === mention.id
+                                ? '1px solid rgba(59, 130, 246, 0.5)'
+                                : '1px solid rgba(148, 163, 184, 0.1)',
+                              borderRadius: '16px',
+                              padding: '1.5rem',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                              {mention.priority === 'high' && (
+                                <span style={{
+                                  background: 'rgba(239, 68, 68, 0.2)',
+                                  color: '#fca5a5',
+                                  padding: '0.25rem 0.75rem',
+                                  borderRadius: '6px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '600',
+                                  textTransform: 'uppercase'
+                                }}>
+                                  High Priority
+                                </span>
+                              )}
+                              <span style={{
+                                background: 'rgba(139, 92, 246, 0.2)',
+                                color: '#c4b5fd',
+                                padding: '0.25rem 0.75rem',
+                                borderRadius: '6px',
+                                fontSize: '0.75rem',
+                                fontWeight: '600'
+                              }}>
+                                {mention.source}
+                              </span>
+                              <span style={{
+                                background: 'rgba(59, 130, 246, 0.2)',
+                                color: '#93c5fd',
+                                padding: '0.25rem 0.75rem',
+                                borderRadius: '6px',
+                                fontSize: '0.75rem',
+                                fontWeight: '600'
+                              }}>
+                                {mention.stage}
+                              </span>
+                            </div>
+                            <h3 style={{
+                              fontSize: '1rem',
+                              fontWeight: '600',
+                              marginBottom: '0.5rem',
+                              color: '#e2e8f0',
+                              lineHeight: '1.4'
+                            }}>
+                              {mention.title}
+                            </h3>
+                            <p style={{
+                              fontSize: '0.875rem',
+                              color: '#94a3b8',
+                              marginBottom: '0.75rem',
+                              lineHeight: '1.5'
+                            }}>
+                              {mention.snippet}
+                            </p>
+                            <div style={{ display: 'flex', gap: '1.5rem', fontSize: '0.75rem', color: '#64748b', flexWrap: 'wrap' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <MapPin size={14} />
+                                {mention.location}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Zap size={14} />
+                                {mention.utility}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Clock size={14} />
+                                {new Date(mention.capturedAt).toLocaleDateString()}
+                              </div>
+                            </div>
+
+                            {view === 'review' && (
+                              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(148, 163, 184, 0.1)' }}>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAction(mention.id, 'approved');
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    padding: '0.5rem',
+                                    background: 'rgba(16, 185, 129, 0.2)',
+                                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                                    borderRadius: '8px',
+                                    color: '#6ee7b7',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: '600'
+                                  }}
+                                >
+                                  <CheckCircle size={16} />
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAction(mention.id, 'deleted');
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    padding: '0.5rem',
+                                    background: 'rgba(239, 68, 68, 0.2)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    borderRadius: '8px',
+                                    color: '#fca5a5',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem',
+                                    fontSize: '0.875rem',
+                                    fontWeight: '600'
+                                  }}
+                                >
+                                  <X size={16} />
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedMention && (
+                    <div style={{
+                      position: 'sticky',
+                      top: '140px',
+                      height: 'fit-content',
+                      background: 'rgba(51, 65, 85, 0.5)',
+                      border: '1px solid rgba(148, 163, 184, 0.1)',
+                      borderRadius: '16px',
+                      padding: '2rem'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1.5rem' }}>
+                        <h3 style={{ fontSize: '1.25rem', fontWeight: '700', margin: 0 }}>Item Details</h3>
+                        <button
+                          onClick={() => setSelectedMention(null)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#94a3b8',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <X size={20} />
+                        </button>
+                      </div>
+
+                      <div style={{ marginBottom: '1.5rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Title</label>
+                        <p style={{ color: '#e2e8f0', fontSize: '0.875rem', lineHeight: '1.5' }}>{selectedMention.title}</p>
+                      </div>
+
+                      <div style={{ marginBottom: '1.5rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Snippet</label>
+                        <p style={{ color: '#e2e8f0', fontSize: '0.875rem', lineHeight: '1.5' }}>{selectedMention.snippet}</p>
+                      </div>
+
+                      <div style={{ marginBottom: '1.5rem' }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Source URL</label>
+                        <a
+                          href={selectedMention.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            color: '#60a5fa',
+                            fontSize: '0.875rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            textDecoration: 'none',
+                            wordBreak: 'break-all'
+                          }}
+                        >
+                          View Original
+                          <ExternalLink size={14} />
+                        </a>
+                      </div>
+
+                      {view === 'review' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(148, 163, 184, 0.1)' }}>
+                          <button
+                            onClick={() => handleAction(selectedMention.id, 'approved')}
+                            style={{
+                              padding: '0.75rem',
+                              background: 'rgba(16, 185, 129, 0.2)',
+                              border: '1px solid rgba(16, 185, 129, 0.3)',
+                              borderRadius: '8px',
+                              color: '#6ee7b7',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.5rem',
+                              fontSize: '0.875rem',
+                              fontWeight: '600'
+                            }}
+                          >
+                            <CheckCircle size={18} />
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => handleAction(selectedMention.id, 'deleted')}
+                            style={{
+                              padding: '0.75rem',
+                              background: 'rgba(239, 68, 68, 0.2)',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              borderRadius: '8px',
+                              color: '#fca5a5',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '0.5rem',
+                              fontSize: '0.875rem',
+                              fontWeight: '600'
+                            }}
+                          >
+                            <X size={18} />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<UtilityMonitorApp />);
+    </script>
+</body>
+</html>
